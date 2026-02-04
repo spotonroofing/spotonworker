@@ -29,6 +29,7 @@ import { createAccessMiddleware } from './auth';
 import { ensureMoltbotGateway, findExistingMoltbotProcess, syncToR2 } from './gateway';
 import { publicRoutes, api, adminUi, debug, cdp } from './routes';
 import { redactSensitiveParams } from './utils/logging';
+import { processResponseForTokenInjection } from './utils/token-injection';
 import loadingPageHtml from './assets/loading.html';
 import configErrorHtml from './assets/config-error.html';
 
@@ -403,14 +404,23 @@ app.all('*', async (c) => {
   const httpResponse = await sandbox.containerFetch(request, MOLTBOT_PORT);
   console.log('[HTTP] Response status:', httpResponse.status);
 
-  // Add debug header to verify worker handled the request
-  const newHeaders = new Headers(httpResponse.headers);
+  // Inject token script into HTML responses for Control UI
+  // This patches WebSocket to include ?token= in connection URLs
+  const processedResponse = await processResponseForTokenInjection(httpResponse, url.pathname);
+
+  // Add debug headers to verify worker handled the request
+  const newHeaders = new Headers(processedResponse.headers);
   newHeaders.set('X-Worker-Debug', 'proxy-to-moltbot');
   newHeaders.set('X-Debug-Path', url.pathname);
 
-  return new Response(httpResponse.body, {
-    status: httpResponse.status,
-    statusText: httpResponse.statusText,
+  // Check if token injection was applied
+  if (newHeaders.has('X-Token-Patch')) {
+    console.log('[HTTP] Token injection applied to HTML response');
+  }
+
+  return new Response(processedResponse.body, {
+    status: processedResponse.status,
+    statusText: processedResponse.statusText,
     headers: newHeaders,
   });
 });
